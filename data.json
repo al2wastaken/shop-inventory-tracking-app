@@ -1,0 +1,17 @@
+{
+    "products": [
+        {
+            "name": "Dis Macunu",
+            "category": 0,
+            "price": 22,
+            "stock": 121,
+            "maxStock": 300,
+            "criticalStockPercentage": 4
+        }
+    ],
+    "categories": [
+        {
+            "name": "Bakim Urunleri"
+        }
+    ]
+}
