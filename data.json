@@ -1,17 +1,16 @@
 {
     "products": [
         {
-            "name": "Dis Macunu",
+            "name": "KitaKek",
             "category": 0,
-            "price": 22,
-            "stock": 121,
-            "maxStock": 300,
-            "criticalStockPercentage": 4
+            "price": 15.0,
+            "stock": 80,
+            "criticalStock": 6
         }
     ],
     "categories": [
         {
-            "name": "Bakim Urunleri"
+            "name": "Atıştırmalık"
         }
     ]
 }
