@@ -1,3 +1,4 @@
+import random
 import customtkinter as ctk
 from models import Database, ProductManager, CategoryManager
 
@@ -47,7 +48,7 @@ COLORS = {
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("🛒 Mağaza Stok Takip — MongoDB")
+        self.title("Mağaza Stok Takip v1.0.0")
         self.geometry("1100x680")
         self.minsize(1100, 680)
         self.resizable(True, True)
@@ -75,15 +76,6 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
             text_color="#ffffff",
         ).pack(side="left", padx=20, pady=12)
-
-        # Bağlantı durumu göstergesi
-        self.status_label = ctk.CTkLabel(
-            self.header,
-            text="● MongoDB Bağlı",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["accent_green"],
-        )
-        self.status_label.pack(side="right", padx=20)
 
         # ── Layout Grid ─────────────────────────────────────────────────
         self.grid_columnconfigure(1, weight=1)
@@ -113,36 +105,23 @@ class App(ctk.CTk):
         )
         self.product_count_label.pack(side="right")
 
-        # Ürün listesi
-        self.product_listbox = ctk.CTkTextbox(
+        # Ürün listesi (scrollable frame — kartlarla)
+        self.product_scroll = ctk.CTkScrollableFrame(
             self.left_frame,
-            width=380, height=400,
-            font=ctk.CTkFont(family="Consolas", size=13),
+            width=360,
             fg_color=COLORS["bg_card"],
-            text_color=COLORS["text_primary"],
             border_width=1,
             border_color=COLORS["border"],
             corner_radius=8,
             scrollbar_button_color=COLORS["scrollbar"],
             scrollbar_button_hover_color=COLORS["bg_hover"],
         )
-        self.product_listbox.pack(fill="both", expand=True, padx=14, pady=6)
-        self.product_listbox.bind("<ButtonRelease-1>", self.on_product_click)
+        self.product_scroll.pack(fill="both", expand=True, padx=14, pady=6)
+        self.product_cards = []  # ürün kart widget referansları
 
-        # Buton çubuğu
-        self.btn_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
-        self.btn_frame.pack(fill="x", padx=14, pady=(6, 8))
-        self.btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._make_button(self.btn_frame, "➕ Ekle", COLORS["btn_save"], COLORS["btn_save_hover"],
-                          self.add_product).grid(row=0, column=0, padx=3, sticky="ew")
-        self._make_button(self.btn_frame, "✏️ Düzenle", COLORS["btn_edit"], COLORS["btn_edit_hover"],
-                          self.edit_product).grid(row=0, column=1, padx=3, sticky="ew")
-        self._make_button(self.btn_frame, "🗑️ Sil", COLORS["btn_delete"], COLORS["btn_delete_hover"],
-                          self.delete_product).grid(row=0, column=2, padx=3, sticky="ew")
-
-        self._make_button(self.left_frame, "💸 Satış Yap", COLORS["btn_sell"], COLORS["btn_sell_hover"],
-                          self.sell_product, height=36).pack(fill="x", padx=14, pady=(2, 14))
+        self._make_button(self.left_frame, "➕ Yeni Ürün Ekle", COLORS["btn_save"], COLORS["btn_save_hover"],
+                          self.add_product, height=36).pack(fill="x", padx=14, pady=(2, 14))
 
         # ── Sağ Panel: Detaylar ve Aksiyonlar ────────────────────────────
         self.right_frame = ctk.CTkFrame(
@@ -159,8 +138,8 @@ class App(ctk.CTk):
             ("📂 Kategoriler", COLORS["btn_category"], COLORS["btn_category_hover"], self.manage_categories),
             ("🔍 Ara", COLORS["btn_search"], COLORS["btn_search_hover"], self.search_products),
             ("🗒️ Tümü", COLORS["btn_neutral"], COLORS["btn_neutral_hover"], self.show_all_products),
-            ("💾 Kaydet", COLORS["btn_save"], COLORS["btn_save_hover"], self.save_all),
             ("🔄 Yenile", COLORS["btn_neutral"], COLORS["btn_neutral_hover"], self.reload_data),
+            ("🧪 Mock", COLORS["accent_orange"], COLORS["btn_sell_hover"], self.generate_mock_data),
         ]
         for i, (text, fg, hover, cmd) in enumerate(toolbar_buttons):
             self.toolbar.grid_columnconfigure(i, weight=1)
@@ -349,42 +328,113 @@ class App(ctk.CTk):
     # ══════════════════════════════════════════════════════════════════════
 
     def refresh_product_list(self, filtered=None):
-        self.product_listbox.configure(state="normal")
-        self.product_listbox.delete("1.0", "end")
-        source = filtered if filtered is not None else self.pm.products
-
-        for p in source:
-            cat_name = self.pm.get_category_name(p)
-            if p.stock <= p.critical_stock:
-                label = f"⚠️  {p.name}  │  {cat_name}  │  Stok: {p.stock}  │  {p.price:.2f} ₺\n"
-            else:
-                label = f"    {p.name}  │  {cat_name}  │  Stok: {p.stock}  │  {p.price:.2f} ₺\n"
-            self.product_listbox.insert("end", label)
-
-        self.product_listbox.configure(state="disabled")
-        self.product_count_label.configure(text=f"{len(source)} ürün")
+        self._build_product_cards(filtered)
         self.clear_details_content()
         self.last_selected_index = None
 
+    def _refresh_product_list_silent(self, filtered=None):
+        """Ürün listesini günceller ama detay panelini temizlemez."""
+        self._build_product_cards(filtered)
+        self.last_selected_index = None
+
+    def _build_product_cards(self, filtered=None):
+        """Ürün kartlarını oluşturur."""
+        # Mevcut kartları temizle
+        for card in self.product_cards:
+            card.destroy()
+        self.product_cards = []
+
+        source = filtered if filtered is not None else self.pm.products
+        self.product_count_label.configure(text=f"{len(source)} ürün")
+        self._current_source = source  # seçim için referans tut
+
+        for idx, p in enumerate(source):
+            cat_name = self.pm.get_category_name(p)
+            is_critical = p.stock <= p.critical_stock
+
+            # Kart frame
+            card = ctk.CTkFrame(
+                self.product_scroll,
+                fg_color=COLORS["bg_input"] if idx % 2 == 0 else COLORS["bg_card"],
+                corner_radius=6,
+                border_width=1,
+                border_color=COLORS["accent_red"] if is_critical else COLORS["border"],
+                cursor="hand2",
+            )
+            card.pack(fill="x", padx=6, pady=2)
+
+            # Üst satır: ürün adı
+            name_color = COLORS["accent_red"] if is_critical else COLORS["text_primary"]
+            warn_prefix = "⚠️ " if is_critical else ""
+            name_label = ctk.CTkLabel(
+                card,
+                text=f"{warn_prefix}{p.name}",
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+                text_color=name_color,
+                anchor="w",
+            )
+            name_label.pack(fill="x", padx=10, pady=(6, 0))
+
+            # Alt satır: kategori | stok | fiyat
+            info_text = f"{cat_name}  •  Stok: {p.stock}  •  {p.price:.2f} ₺"
+            info_label = ctk.CTkLabel(
+                card,
+                text=info_text,
+                font=ctk.CTkFont(family="Segoe UI", size=11),
+                text_color=COLORS["text_muted"],
+                anchor="w",
+            )
+            info_label.pack(fill="x", padx=10, pady=(0, 6))
+
+            # Tıklama eventi
+            def on_click(event, i=idx):
+                self._select_product_card(i)
+
+            card.bind("<Button-1>", on_click)
+            name_label.bind("<Button-1>", on_click)
+            info_label.bind("<Button-1>", on_click)
+
+            # Hover efekti
+            def on_enter(event, c=card):
+                c.configure(fg_color=COLORS["bg_hover"])
+
+            def on_leave(event, c=card, i=idx):
+                if self.last_selected_index == i:
+                    c.configure(fg_color=COLORS["accent_blue"])
+                else:
+                    c.configure(fg_color=COLORS["bg_input"] if i % 2 == 0 else COLORS["bg_card"])
+
+            card.bind("<Enter>", on_enter)
+            card.bind("<Leave>", on_leave)
+            name_label.bind("<Enter>", on_enter)
+            name_label.bind("<Leave>", on_leave)
+            info_label.bind("<Enter>", on_enter)
+            info_label.bind("<Leave>", on_leave)
+
+            self.product_cards.append(card)
+
+    def _select_product_card(self, index):
+        """Bir ürün kartını seç ve vurgula."""
+        # Önceki seçimi temizle
+        if self.last_selected_index is not None and self.last_selected_index < len(self.product_cards):
+            old_card = self.product_cards[self.last_selected_index]
+            old_card.configure(
+                fg_color=COLORS["bg_input"] if self.last_selected_index % 2 == 0 else COLORS["bg_card"]
+            )
+
+        self.last_selected_index = index
+        source = getattr(self, '_current_source', self.pm.products)
+
+        if index < len(self.product_cards):
+            self.product_cards[index].configure(fg_color=COLORS["accent_blue"])
+
+        if index < len(source):
+            product = source[index]
+            self.show_product_details(product)
+
     def show_all_products(self):
         self.pm.load_products()
-        self.refresh_product_list()
-
-    # ══════════════════════════════════════════════════════════════════════
-    # Seçim & Detaylar
-    # ══════════════════════════════════════════════════════════════════════
-
-    def on_product_click(self, event=None):
-        try:
-            index = self.product_listbox.index(f"@{event.x},{event.y}")
-            line = int(str(index).split(".")[0]) - 1
-        except Exception:
-            return
-        if line < 0 or line >= len(self.pm.products):
-            return
-        self.last_selected_index = line
-        product = self.pm.products[line]
-        self.show_product_details(product)
+        self._refresh_product_list_silent()
 
     def show_product_details(self, product):
         self.clear_details_content()
@@ -695,7 +745,7 @@ class App(ctk.CTk):
                 return
 
             results = self.pm.search_products(name_q, cat_id, min_p, max_p)
-            self.refresh_product_list(filtered=results)
+            self._refresh_product_list_silent(filtered=results)
 
         btn_row = ctk.CTkFrame(self.details_content, fg_color="transparent")
         btn_row.grid(row=r, column=0, columnspan=2, pady=12)
@@ -751,10 +801,9 @@ class App(ctk.CTk):
                 self.show_warning("Uyarı", "Kategori adı boş olamaz.")
                 return
             self.cm.create_category(name)
-            populate()
-            name_var.set("")
             self.pm.load_products()
-            self.refresh_product_list()
+            self._refresh_product_list_silent()
+            self.manage_categories()
 
         def delete_cat():
             del_name = name_var.get().strip()
@@ -768,10 +817,9 @@ class App(ctk.CTk):
             if not self.ask_yes_no("Sil", f"'{del_name}' kategorisi silinsin mi?"):
                 return
             self.cm.delete_category(cat)
-            populate()
-            name_var.set("")
             self.pm.load_products()
-            self.refresh_product_list()
+            self._refresh_product_list_silent()
+            self.manage_categories()
 
         self._make_button(btn_row, "➕ Ekle", COLORS["btn_save"], COLORS["btn_save_hover"],
                           add_cat, height=32).grid(row=0, column=0, padx=(0, 4), sticky="ew")
@@ -782,16 +830,136 @@ class App(ctk.CTk):
     # Veritabanı İşlemleri
     # ══════════════════════════════════════════════════════════════════════
 
-    def save_all(self):
-        """Tüm değişiklikler zaten anında MongoDB'ye kaydedilir."""
-        self.show_info("Bilgi", "Tüm değişiklikler MongoDB'ye otomatik olarak kaydedilmektedir.")
-
     def reload_data(self):
         """Veritabanından tüm verileri yeniden yükle."""
         self.cm.load_categories()
         self.pm.load_products()
-        self.refresh_product_list()
+        self._refresh_product_list_silent()
         self.show_info("Yenilendi", "Veriler MongoDB'den yeniden yüklendi.")
+    def generate_mock_data(self):
+        """8 kategori ve her kategoride 10 ürün olmak üzere mock veri oluşturur."""
+        if not self.ask_yes_no("Mock Veri", "Mevcut verilere ek olarak 8 kategori ve 80 ürün oluşturulacak.\nDevam edilsin mi?"):
+            return
+
+        mock_categories = {
+            "Atıştırmalık": [
+                ("Çikolatalı Gofret", 8.50, 120, 15),
+                ("Fıstıklı Çikolata", 12.75, 85, 10),
+                ("Patates Cipsi", 15.00, 200, 25),
+                ("Mısır Cipsi", 10.50, 150, 20),
+                ("Bisküvi Paketi", 6.25, 300, 30),
+                ("Kuruyemiş Karışık", 45.00, 60, 8),
+                ("Çubuk Kraker", 5.75, 180, 20),
+                ("Kek Dilimi", 7.00, 90, 12),
+                ("Jelibon", 4.50, 250, 30),
+                ("Gofret Bar", 9.25, 110, 15),
+            ],
+            "İçecekler": [
+                ("Maden Suyu", 5.00, 500, 50),
+                ("Ayran", 8.00, 300, 40),
+                ("Portakal Suyu", 18.50, 120, 15),
+                ("Elma Suyu", 16.75, 100, 15),
+                ("Limonata", 12.00, 180, 20),
+                ("Buzlu Çay", 14.50, 200, 25),
+                ("Enerji İçeceği", 22.00, 80, 10),
+                ("Soda", 4.50, 400, 50),
+                ("Gazlı İçecek", 10.00, 350, 40),
+                ("Süt 1L", 20.00, 150, 20),
+            ],
+            "Temizlik": [
+                ("Bulaşık Deterjanı", 35.00, 80, 10),
+                ("Çamaşır Deterjanı", 85.00, 50, 8),
+                ("Cam Temizleyici", 28.00, 60, 10),
+                ("Yüzey Temizleyici", 32.00, 70, 10),
+                ("Tuvalet Temizleyici", 25.00, 90, 12),
+                ("Sünger Seti", 12.00, 150, 20),
+                ("Çöp Poşeti", 18.50, 200, 25),
+                ("Islak Mendil", 15.00, 180, 20),
+                ("El Sabunu", 22.00, 100, 15),
+                ("Kağıt Havlu", 30.00, 120, 15),
+            ],
+            "Kırtasiye": [
+                ("Kurşun Kalem", 3.50, 500, 50),
+                ("Tükenmez Kalem", 5.00, 400, 40),
+                ("Silgi", 2.50, 300, 30),
+                ("Cetvel 30cm", 8.00, 150, 20),
+                ("Defter A4", 15.00, 200, 25),
+                ("Yapıştırıcı", 10.00, 180, 20),
+                ("Makas", 12.50, 100, 15),
+                ("Boya Kalemi Seti", 25.00, 80, 10),
+                ("Dosya Klasör", 18.00, 120, 15),
+                ("Kalem Açacağı", 4.00, 250, 30),
+            ],
+            "Elektronik": [
+                ("USB Kablo", 35.00, 100, 12),
+                ("Kulaklık", 75.00, 60, 8),
+                ("Mouse Pad", 45.00, 80, 10),
+                ("Şarj Adaptörü", 120.00, 40, 5),
+                ("Powerbank", 250.00, 30, 5),
+                ("Bluetooth Hoparlör", 350.00, 25, 3),
+                ("USB Bellek 32GB", 85.00, 50, 8),
+                ("Ekran Temizleyici", 40.00, 70, 10),
+                ("Telefon Kılıfı", 55.00, 90, 12),
+                ("LED Masa Lambası", 180.00, 20, 3),
+            ],
+            "Gıda": [
+                ("Ekmek", 10.00, 200, 30),
+                ("Yumurta 15'li", 45.00, 100, 15),
+                ("Peynir 500g", 65.00, 60, 8),
+                ("Zeytin 1kg", 80.00, 50, 8),
+                ("Makarna 500g", 12.00, 300, 40),
+                ("Pirinç 1kg", 35.00, 150, 20),
+                ("Un 2kg", 28.00, 120, 15),
+                ("Şeker 1kg", 22.00, 180, 25),
+                ("Tuz 750g", 8.00, 250, 30),
+                ("Salça 700g", 30.00, 100, 12),
+            ],
+            "Kişisel Bakım": [
+                ("Şampuan", 55.00, 80, 10),
+                ("Saç Kremi", 48.00, 60, 8),
+                ("Diş Macunu", 28.00, 150, 20),
+                ("Diş Fırçası", 18.00, 200, 25),
+                ("Deodorant", 42.00, 90, 12),
+                ("Tıraş Köpüğü", 35.00, 70, 10),
+                ("Tıraş Bıçağı", 65.00, 50, 8),
+                ("El Kremi", 30.00, 100, 15),
+                ("Dudak Bakım", 22.00, 120, 15),
+                ("Pamuk", 15.00, 180, 20),
+            ],
+            "Ev & Yaşam": [
+                ("Mum Seti", 25.00, 60, 8),
+                ("Çerçeve", 40.00, 45, 5),
+                ("Saksı", 35.00, 50, 8),
+                ("Vazo", 55.00, 30, 5),
+                ("Masa Örtüsü", 70.00, 40, 5),
+                ("Yastık Kılıfı", 45.00, 80, 10),
+                ("Havlu Seti", 85.00, 60, 8),
+                ("Perde Askısı", 30.00, 50, 8),
+                ("Ayakkabılık", 120.00, 20, 3),
+                ("Askı Seti", 18.00, 100, 15),
+            ],
+        }
+
+        created_cats = 0
+        created_products = 0
+
+        for cat_name, products in mock_categories.items():
+            # Kategoriyi oluştur
+            cat = self.cm.create_category(cat_name)
+            created_cats += 1
+
+            for prod_name, base_price, base_stock, critical in products:
+                # Fiyat ve stokta hafif rastgele varyasyon
+                price = round(base_price * random.uniform(0.9, 1.1), 2)
+                stock = int(base_stock * random.uniform(0.7, 1.3))
+                self.pm.create_product(prod_name, cat._id, price, stock, critical)
+                created_products += 1
+
+        # Verileri yeniden yükle
+        self.cm.load_categories()
+        self.pm.load_products()
+        self._refresh_product_list_silent()
+        self.show_info("Mock Veri", f"{created_cats} kategori ve {created_products} ürün oluşturuldu!")
 
 
 if __name__ == "__main__":

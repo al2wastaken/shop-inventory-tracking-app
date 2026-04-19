@@ -1,15 +1,20 @@
+import os
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from bson import ObjectId
+
+# .env dosyasını yükle
+load_dotenv()
 
 
 class Database:
     """MongoDB veritabanı bağlantısı ve işlemleri."""
 
-    def __init__(self, connection_string="mongodb://localhost:27017", db_name="shop_inventory"):
+    def __init__(self):
         self.client = None
         self.db = None
-        self.connection_string = connection_string
-        self.db_name = db_name
+        self.connection_string = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+        self.db_name = os.getenv("MONGODB_DB_NAME", "shop_inventory")
 
     def connect(self):
         """MongoDB'ye bağlan."""
