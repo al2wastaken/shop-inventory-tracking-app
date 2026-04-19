@@ -1,155 +1,227 @@
-import json
+from pymongo import MongoClient
+from bson import ObjectId
+
 
 class Database:
-    def __init__(self):
-        self.data = {}
+    """MongoDB veritabanı bağlantısı ve işlemleri."""
 
-    def loadDatabase(self):
+    def __init__(self, connection_string="mongodb://localhost:27017", db_name="shop_inventory"):
+        self.client = None
+        self.db = None
+        self.connection_string = connection_string
+        self.db_name = db_name
+
+    def connect(self):
+        """MongoDB'ye bağlan."""
         try:
-            with open("data.json", "r", encoding="utf-8") as file:
-                self.data = json.load(file)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.data = {"products": [], "categories": []}
-    
-    def saveToDatabase(self, products, categories):
-        """Writes the in-memory data back to the JSON file."""
-        try:
-            with open("data.json", "w", encoding="utf-8") as file:
-                # ensure_ascii=False prevents Turkish character corruption
-                json.dump({"products": products, "categories": categories}, file, indent=4, ensure_ascii=False)
+            self.client = MongoClient(self.connection_string, serverSelectionTimeoutMS=3000)
+            # Bağlantıyı test et
+            self.client.server_info()
+            self.db = self.client[self.db_name]
+            return True
         except Exception as e:
-            print(f"Save Error: {e}")
+            print(f"MongoDB bağlantı hatası: {e}")
+            return False
 
+    def close(self):
+        """Bağlantıyı kapat."""
+        if self.client:
+            self.client.close()
 
+    def get_products_collection(self):
+        return self.db["products"]
 
+    def get_categories_collection(self):
+        return self.db["categories"]
 
 
 class Category:
-    def __init__(self, index, name):
-        self.index = index
+    def __init__(self, name, _id=None):
+        self._id = _id
         self.name = name
 
     def __str__(self):
         return f"Kategori Adı: {self.name}"
-    
-    def setName(self, newName, data):
-        data["categories"][self.index] = newName
 
-    def getJsonObject(self):
+    def to_dict(self):
         return {"name": self.name}
 
 
-
 class CategoryManager:
-    def __init__(self):
+    def __init__(self, db: Database):
+        self.db = db
         self.categories = []
 
-    def loadCategories(self, data):
-        categoriesInDatabase = data["categories"]
-        for c in categoriesInDatabase:
-            self.categories.append(Category(categoriesInDatabase.index(c), c["name"]))
-    
-    def createNewCategory(self, name):
-        newCategory = Category(len(self.categories), name)
-        self.categories.append(newCategory)
+    def load_categories(self):
+        """MongoDB'den kategorileri yükle."""
+        self.categories = []
+        collection = self.db.get_categories_collection()
+        for doc in collection.find():
+            cat = Category(name=doc["name"], _id=doc["_id"])
+            self.categories.append(cat)
 
-    def getJsonObjects(self):
-        jsonObjects = []
+    def create_category(self, name):
+        """Yeni kategori oluştur ve MongoDB'ye kaydet."""
+        collection = self.db.get_categories_collection()
+        result = collection.insert_one({"name": name})
+        new_cat = Category(name=name, _id=result.inserted_id)
+        self.categories.append(new_cat)
+        return new_cat
+
+    def delete_category(self, category):
+        """Kategoriyi MongoDB'den sil."""
+        collection = self.db.get_categories_collection()
+        collection.delete_one({"_id": category._id})
+        self.categories.remove(category)
+
+    def rename_category(self, category, new_name):
+        """Kategori adını güncelle."""
+        collection = self.db.get_categories_collection()
+        collection.update_one({"_id": category._id}, {"$set": {"name": new_name}})
+        category.name = new_name
+
+    def get_category_by_id(self, _id):
+        """ID ile kategori bul."""
         for c in self.categories:
-            jsonObjects.append(c.getJsonObject())
-        return jsonObjects
+            if c._id == _id:
+                return c
+        return None
 
-
-
+    def get_category_by_name(self, name):
+        """İsim ile kategori bul."""
+        for c in self.categories:
+            if c.name == name:
+                return c
+        return None
 
 
 class Product:
-    def __init__(self, name, category, price, stock, criticalStock, categoryManager):
+    def __init__(self, name, category_id, price, stock, critical_stock, _id=None):
+        self._id = _id
         self.name = name
-        self.category = category
+        self.category_id = category_id  # MongoDB ObjectId referansı
         self.price = price
         self.stock = stock
-        self.criticalStock = criticalStock
-        self.categoryManager = categoryManager
+        self.critical_stock = critical_stock
 
     def __str__(self):
-        return f"""
-Ürün Adı: {self.name}
-Kategori Adı: {self.getCategoryName()}
-Ürün Fiyatı: {self.price}
-Ürün Stoğu: {self.stock}
-Kritik Stok Miktarı: {self.criticalStock}
-"""
+        return (
+            f"Ürün Adı: {self.name}\n"
+            f"Ürün Fiyatı: {self.price:.2f} ₺\n"
+            f"Ürün Stoğu: {self.stock}\n"
+            f"Kritik Stok: {self.critical_stock}"
+        )
 
-    def rename(self, newName):
-        self.name = newName
-
-    def setCategory(self, category):
-        self.category = category
-
-    def getCategoryName(self):
-        cm = self.categoryManager
-        return cm.categories[self.category].name
-
-    def setPrice(self, newPrice):
-        self.price = newPrice
-
-    def increasePrice(self, percentage):
-        self.price *= (1 + percentage / 100)
-
-    def decreasePrice(self, percentage):
-        self.price *= (1 - percentage / 100)
-
-    def addStock(self, amount):
-        self.stock += amount
-
-    def removeStock(self, amount):
-        self.stock -= amount
-
-    def setStock(self, amount):
-        self.stock = amount
-
-    def setcriticalStock(self, amount):
-        self.criticalStock = amount
-
-    def getJsonObject(self):
+    def to_dict(self):
         return {
             "name": self.name,
-            "category": self.category,
+            "category_id": self.category_id,
             "price": self.price,
             "stock": self.stock,
-            "criticalStock": self.criticalStock
+            "critical_stock": self.critical_stock,
         }
 
 
-
 class ProductManager:
-    def __init__ (self):
+    def __init__(self, db: Database, cm: CategoryManager):
+        self.db = db
+        self.cm = cm
         self.products = []
 
-    def loadProducts(self, data, categoryManager):
-        productsInDatabase = data["products"]
+    def load_products(self):
+        """MongoDB'den ürünleri yükle."""
+        self.products = []
+        collection = self.db.get_products_collection()
+        for doc in collection.find():
+            product = Product(
+                name=doc["name"],
+                category_id=doc.get("category_id"),
+                price=doc["price"],
+                stock=doc["stock"],
+                critical_stock=doc.get("critical_stock", 0),
+                _id=doc["_id"],
+            )
+            self.products.append(product)
 
-        for p in productsInDatabase:
-            self.products.append(Product(p["name"], p["category"], p["price"], p["stock"], p["criticalStock"], categoryManager))
+    def create_product(self, name, category_id, price, stock, critical_stock):
+        """Yeni ürün oluştur ve MongoDB'ye kaydet."""
+        collection = self.db.get_products_collection()
+        doc = {
+            "name": name,
+            "category_id": category_id,
+            "price": price,
+            "stock": stock,
+            "critical_stock": critical_stock,
+        }
+        result = collection.insert_one(doc)
+        new_product = Product(
+            name=name,
+            category_id=category_id,
+            price=price,
+            stock=stock,
+            critical_stock=critical_stock,
+            _id=result.inserted_id,
+        )
+        self.products.append(new_product)
+        return new_product
 
-    def createNewProduct(self, name, category, price, stock, criticalStock, categoryManager):
-        newProduct = Product(name, category, price, stock, criticalStock, categoryManager)
-        self.products.append(newProduct)
-    
-    def sellProduct(self, productIndex, amount):
-        self.products[productIndex].removeStock(amount)
-        
+    def update_product(self, product):
+        """Ürünü MongoDB'de güncelle."""
+        collection = self.db.get_products_collection()
+        collection.update_one(
+            {"_id": product._id},
+            {"$set": product.to_dict()},
+        )
 
-    def getProductsByCategory(self, categoryIndex):
-        filteredProducts = []
-        for p in self.products:
-            if p.category == categoryIndex:
-                filteredProducts.append(p)
-        return filteredProducts
+    def delete_product(self, product):
+        """Ürünü MongoDB'den sil."""
+        collection = self.db.get_products_collection()
+        collection.delete_one({"_id": product._id})
+        self.products.remove(product)
 
-    def getJsonObjects(self):
-        jsonObjects = []
-        for p in self.products:
-            jsonObjects.append(p.getJsonObject())
-        return jsonObjects
+    def sell_product(self, product, quantity):
+        """Ürün satışı yap ve stok güncelle."""
+        if quantity > product.stock:
+            raise ValueError("Yeterli stok yok!")
+        product.stock -= quantity
+        self.update_product(product)
+
+    def update_stock(self, product, new_stock):
+        """Stok miktarını güncelle."""
+        product.stock = new_stock
+        self.update_product(product)
+
+    def search_products(self, name_query=None, category_id=None, min_price=None, max_price=None):
+        """Ürün arama — filtreleme MongoDB sorgusu ile yapılır."""
+        collection = self.db.get_products_collection()
+        query = {}
+
+        if name_query:
+            query["name"] = {"$regex": name_query, "$options": "i"}
+        if category_id is not None:
+            query["category_id"] = category_id
+        if min_price is not None or max_price is not None:
+            price_filter = {}
+            if min_price is not None:
+                price_filter["$gte"] = min_price
+            if max_price is not None:
+                price_filter["$lte"] = max_price
+            query["price"] = price_filter
+
+        results = []
+        for doc in collection.find(query):
+            product = Product(
+                name=doc["name"],
+                category_id=doc.get("category_id"),
+                price=doc["price"],
+                stock=doc["stock"],
+                critical_stock=doc.get("critical_stock", 0),
+                _id=doc["_id"],
+            )
+            results.append(product)
+        return results
+
+    def get_category_name(self, product):
+        """Ürünün kategori adını döndür."""
+        cat = self.cm.get_category_by_id(product.category_id)
+        return cat.name if cat else "Kategorisiz"
