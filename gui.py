@@ -1,6 +1,15 @@
+import os
+import sys
 import random
 import customtkinter as ctk
 from models import Database, ProductManager, CategoryManager
+
+
+def resource_path(relative_path):
+    """PyInstaller ile paketlenmiş dosyaları bulmak için yardımcı fonksiyon."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath(os.path.dirname(__file__)), relative_path)
 
 # ── Dark Mode Tema Ayarları ──────────────────────────────────────────────
 ctk.set_appearance_mode("Dark")
@@ -53,6 +62,12 @@ class App(ctk.CTk):
         self.minsize(1100, 680)
         self.resizable(True, True)
         self.configure(fg_color=COLORS["bg_primary"])
+
+        # ── Pencere İkonu ────────────────────────────────────────────────
+        icon_path = resource_path("logo.ico")
+        if os.path.exists(icon_path):
+            self.iconbitmap(icon_path)
+            self.after(200, lambda: self.iconbitmap(icon_path))
 
         # ── MongoDB Bağlantısı ───────────────────────────────────────────
         self.db = Database()
